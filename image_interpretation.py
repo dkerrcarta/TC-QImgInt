@@ -24,12 +24,25 @@
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
+from qgis.core import QgsProject, QgsVectorLayer, QgsVectorLayerJoinInfo, QgsProject, QgsExpression, Qgis, QgsField
+from PyQt5.QtWidgets import QAbstractItemView, QAction, QMessageBox
+from PyQt5.QtCore import QVariant
+
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
 from .image_interpretation_dialog import ImageInterpretationDialog
 import os.path
+
+from pathlib import Path
+import pandas as pd
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent
+CSV = BASE_DIR.joinpath('csv/classes.csv')
+CSV_POINTS = BASE_DIR.joinpath('csv/classes_for_points.csv')
+CSV_AREAS = BASE_DIR.joinpath('csv/hatitat_tile_intersection_areas.csv')
 
 
 class ImageInterpretation:
@@ -179,6 +192,177 @@ class ImageInterpretation:
                 action)
             self.iface.removeToolBarIcon(action)
 
+    def geometry_okay(self, layer):
+        """Returns true if geometry good; False if not"""
+        geom_okay = True
+        for feature in layer.getFeatures():
+            for y_feature in layer.getFeatures():
+                if not y_feature.id() == feature.id():
+                    if y_feature.geometry().overlaps(feature.geometry()):
+                        print(f'Overlaps between rows {y_feature.id()} and {feature.id()}')
+                        self.iface.messageBar().pushMessage("Error", f'Overlaps between rows {y_feature.id()} and {feature.id()}', level=Qgis.Critical)
+                        geom_okay = False
+                    if feature.geometry().contains(y_feature.geometry()):
+                        print(f'Row {feature.id()} contains {y_feature.id()}')
+                        self.iface.messageBar().pushMessage("Error", f'Row {feature.id()} contains {y_feature.id()}', level=Qgis.Critical)
+                        geom_okay = False
+            if not feature.geometry().isGeosValid():
+                self.iface.messageBar().pushMessage("Error", f"There seems to be an invalid geometry in row {feature.id() + 1}. Please fix this geometry before continuing", level=Qgis.Critical)
+                geom_okay = False
+        return geom_okay
+
+    def complete_fields(self, layer):
+        """Join shapefile to csv and fill in the missing fields based on sub ID"""
+        infoLyr = QgsVectorLayer(f'file:///{str(CSV)}?delimiter=,','classes','delimitedtext')
+        QgsProject.instance().addMapLayer(infoLyr)
+        csv_field = 'Int_SubNum'
+        shp_field = 'HabitatSub'
+        joinObject = QgsVectorLayerJoinInfo()
+        joinObject.setJoinFieldName(csv_field)
+        joinObject.setTargetFieldName(shp_field)
+        joinObject.setJoinLayerId(infoLyr.id())
+        joinObject.setUsingMemoryCache(True)
+        joinObject.setJoinLayer(infoLyr)
+        layer.addJoin(joinObject)
+        layer.startEditing()
+        ha_areas = []
+        for feature in layer.getFeatures():
+            shp_fields = ['HabitatTyp', 'HabitatT_1', 'HabitatS_1', 'MMU_HA']
+            csv_fields = ['classes_Int_num', 'classes_Int_cls', 'classes_Int_SubCls', 'classes_MMU_']
+            for shp, csv in zip(shp_fields, csv_fields):
+                f = layer.fields().indexFromName(csv)
+                f_ = layer.fields().indexFromName(shp)
+                layer.changeAttributeValue(feature.id(), f_, feature[f])
+            area_km = layer.fields().indexFromName('Area_KM')
+            area_ha = layer.fields().indexFromName('Area_HA')
+            orthoid_field = layer.fields().indexFromName('OrthoID')
+            id_field = layer.fields().indexFromName('Id')
+            layer.changeAttributeValue(feature.id(), area_km, feature.geometry().area() / 10**6)
+            layer.changeAttributeValue(feature.id(), area_ha, feature.geometry().area() / 10**4)
+            ha_areas.append(feature.geometry().area() / 10**4)
+            layer.changeAttributeValue(feature.id(), orthoid_field, layer.name())
+            layer.changeAttributeValue(feature.id(), id_field, feature.id())
+            
+        layer.removeJoin(infoLyr.id())
+        QgsProject.instance().removeMapLayer(infoLyr)
+        fields_to_drop = set(['RuleID', 'Shape_Leng', 'Shape_Area'])
+        field_ids = []
+        for field in layer.fields():
+            if field.name() in fields_to_drop:
+                field_ids.append(layer.fields().indexFromName(field.name()))
+        layer.dataProvider().deleteAttributes(field_ids)
+        layer.commitChanges()
+
+    def invalid_values_in_shape_attributes(self, layer):
+        """Returns True if NULL values found in habitat class, meaning incorrect subclass IDs were entered"""
+        values_invalid = False
+        hab_type = layer.fields().indexFromName('HabitatTyp')
+        hab_id = layer.fields().indexFromName('HabitatT_1')
+        hab_sub = layer.fields().indexFromName('HabitatS_1')
+        mmu = layer.fields().indexFromName('MMU_HA')
+
+        for i in layer.getFeatures():
+            if not i[hab_type] or not i[hab_id] or not i[hab_sub] or not i[mmu]:
+                print('MISSING')
+                values_invalid = True
+        return values_invalid
+
+    def area_larger_than_mmu(self, layer):
+        """Returns True if polygons smaller than MMU, along with list of ids which fall below threshold"""
+        ids_where_mmu_smaller = []
+        greater_than_mmu = True
+        area_ha = layer.fields().indexFromName('Area_HA')
+        mmu_ha = layer.fields().indexFromName('MMU_HA')
+        for feature in layer.getFeatures():
+            if feature[area_ha] < feature[mmu_ha]:
+                greater_than_mmu = False
+                ids_where_mmu_smaller.append(feature.id())
+        return greater_than_mmu, ids_where_mmu_smaller
+
+    def update_mmu_valid_field(self, layer):
+        """Sets mmu_valid_field to false if mmu > area_ha"""
+        area_ha = layer.fields().indexFromName('Area_HA')
+        mmu_ha = layer.fields().indexFromName('MMU_HA')
+        caps = layer.dataProvider().capabilities()
+        if layer.fields().indexFromName('mmu_valid') == -1:
+            if caps:
+                greater_than_mmu_field = QgsField('mmu_valid', QVariant.String)
+                if not greater_than_mmu_field in layer.fields():
+                    layer.dataProvider().addAttributes([greater_than_mmu_field])
+                    layer.updateFields()
+        idx = layer.fields().indexFromName('mmu_valid')
+        layer.startEditing()
+        for feature in layer.getFeatures():
+            if feature[area_ha] < feature[mmu_ha]:
+                layer.changeAttributeValue(feature.id(), idx, 'False')      
+            else:
+                layer.changeAttributeValue(feature.id(), idx, 'True')
+            layer.updateFields()
+        layer.commitChanges()
+
+    def total_area_matches_expected_area(self, layer):
+        """Returns True if summed area of polygons matches area of habitat's intersection with tile --> Threshold: 0.000005% (0.5 sq metres in 10,000ha)"""
+        areas_match = True
+        df = pd.read_csv(CSV_AREAS)
+        orthoid_index = layer.fields().indexFromName('OrthoID')
+        area_shp_index = layer.fields().indexFromName('Area_HA')
+        area_of_all_polygons = []
+        for feature in layer.getFeatures():
+            orthoid = feature[orthoid_index]
+            area_shp = feature[area_shp_index]
+            area_of_all_polygons.append(area_shp)
+        threshold_area = df['Int_area'][df['index'] == orthoid].values[0] * 0.000000005# <----- 0.000005% total area
+        if abs(df['Int_area'][df['index'] == orthoid].values[0] - sum(area_of_all_polygons)) > threshold_area:
+            areas_match = False
+        return areas_match
+
+    def join_to_pt_and_extract(self, layer):
+        """Extract interpretation values to points"""
+        print(layer.name())
+        pt_name = f'{layer.name()}_points'
+        try:
+            pt_lyr = QgsProject.instance().mapLayersByName(pt_name)[0]
+        except IndexError:
+            QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'Please add the correct point shapefile to the map. Could not find {pt_name}')
+            raise
+        shp_fields = ['HabitatTyp', 'HabitatT_1', 'HabitatS_1', 'HabitatSub']
+        pt_fields = ['Hab_num', 'Hab_name', 'Hab_subnam', 'Hab_subnum']
+        pt_lyr.startEditing()
+        for feature_x in pt_lyr.getFeatures():
+            for feature_y in layer.getFeatures():
+                if feature_y.geometry().intersects(feature_x.geometry()):
+                    for shp, pt in zip(shp_fields, pt_fields):
+                        f = pt_lyr.fields().indexFromName(pt)
+                        f_ = layer.fields().indexFromName(shp)
+                        pt_lyr.changeAttributeValue(feature_x.id(), f, feature_y[f_])
+        pt_lyr.commitChanges()
+
+    def check_inputs_and_fill_fields(self, layer):
+        """Main function to carry out logic and call helper functions"""
+        #check if geometry in added layers is valid
+        if self.geometry_okay(layer):
+            self.complete_fields(layer)
+            if self.invalid_values_in_shape_attributes(layer):
+                QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'There are invalid Habitat codes in the table. Please check the numeric subclass code in rows that have empty values.')
+            mmu_area_okay, ids_where_mmu_smaller = self.area_larger_than_mmu(layer)
+            if not mmu_area_okay:
+                 QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'The following IDs have areas smaller that the MMU. The file will still be saved, but these areas should be checked in rows: {ids_where_mmu_smaller}')
+            self.update_mmu_valid_field(layer)
+            if self.total_area_matches_expected_area(layer):
+                self.join_to_pt_and_extract(layer)
+                self.iface.messageBar().pushMessage("Success", "Shapefile saved successfully.")
+                QMessageBox.information(self.iface.mainWindow(),
+                            'Success',
+                            "Shapefile saved successfully.")
+            else:
+                QMessageBox.critical(self.iface.mainWindow(),
+                         'Error with Areas!',
+                         f"The sum of interpretted areas is different to the total area of this tile. There may by errors/gaps in the polygons.")        
+        else:
+            QMessageBox.critical(self.iface.mainWindow(),
+                         'Error! Something went wrong',
+                         "Shapefile NOT saved. Please check Python terminal or Message Log for details. You may need to run the 'FIX GEOMETRIES TOOL'.")
+
 
     def run(self):
         """Run method that performs all the real work"""
@@ -189,6 +373,12 @@ class ImageInterpretation:
             self.first_start = False
             self.dlg = ImageInterpretationDialog()
 
+         # Fetch the currently loaded layers
+        layers = QgsProject.instance().layerTreeRoot().children()
+        # Clear the contents of the comboBox from previous runs
+        self.dlg.comboBox.clear()
+        # Populate the comboBox with names of all the loaded layers
+        self.dlg.comboBox.addItems([layer.name() for layer in layers])
         # show the dialog
         self.dlg.show()
         # Run the dialog event loop
@@ -196,5 +386,7 @@ class ImageInterpretation:
         # See if OK was pressed
         if result:
             # Do something useful here - delete the line containing pass and
-            # substitute with your code.
-            pass
+            # substitute with your code.            
+            selected_layer_index = self.dlg.comboBox.currentIndex()
+            selected_layer = layers[selected_layer_index].layer()
+            self.check_inputs_and_fill_fields(selected_layer)

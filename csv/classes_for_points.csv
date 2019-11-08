@@ -1,0 +1,42 @@
+Int_num_csv,Int_cls_csv,Int_SubNum_csv,Int_SubCls_csv,MMU_
+1000,Intertidal Habitats,1010,Mudflats and sand exposed at low tide,5
+1000,Intertidal Habitats,1020,Sheltered tidal flat with cyanobacterial mats,5
+1000,Intertidal Habitats,1030,Saltmarsh,5
+1000,Intertidal Habitats,1040,Mangroves,5
+1000,Intertidal Habitats,1050,Storm beach ridges,5
+1000,Intertidal Habitats,1060,Sandy beaches,5
+1000,Intertidal Habitats,1070,Beach rock and gravelly beaches,5
+2000,"Coastal plains, sand sheets and low dunes",2011,Coastal plains on well-drained sandy ground,5
+2000,"Coastal plains, sand sheets and low dunes",2012,Coastal plains on well-drained rocky or gravelly terrain,5
+2000,"Coastal plains, sand sheets and low dunes",2020,Coastal sand sheets and low dunes,5
+2000,"Coastal plains, sand sheets and low dunes",2030,"Coastal cliffs, headlands, rocky slopes and wadis in coastal situations",5
+3000,"Coastal Sabkha, including sabkha matti",3100,"Coastal Sabkha, including sabkha matti",5
+4000,Sand sheets and dunes,4110,Sand sheets and dunes with tree cover,5
+4000,Sand sheets and dunes,4120,Sand sheets and dunes with shrub cover,5
+4000,Sand sheets and dunes,4130,Sand sheets and dunes with dwarf shrub cover,5
+4000,Sand sheets and dunes,4140,Sand sheets and dunes with perennial herbs and graminoids,5
+4000,Sand sheets and dunes,4200,Mega-dunes,5
+5000,Gravel plains (alluvial and interdunal),5110,Gravel plains with distinct tree vegetation,5
+5000,Gravel plains (alluvial and interdunal),5120,Gravel plains with dwarf shrub vegetation,5
+5000,Gravel plains (alluvial and interdunal),5130,Gravel plains with sparse vegetation,5
+5000,Gravel plains (alluvial and interdunal),5200,Inland sabkha,5
+6000,"Mountains, rocky terrain and wadis",6100,"Mountain slopes, screes, and associated wadis",5
+6000,"Mountains, rocky terrain and wadis",6210,"Jebels, (including mesas and burqas)",5
+6000,"Mountains, rocky terrain and wadis",6220,"Escarpments, lithified sand dunes, rocky exposures",5
+6000,"Mountains, rocky terrain and wadis",6230,Wadis in open terrain and drainage channels,5
+7000,Inland standing water habitats and habitats of moist ground,7100,Semi-artificial lakes,1
+7000,Inland standing water habitats and habitats of moist ground,7200,"Moist ground with Phragmites, Tamarix and grass mats",5
+8000,"Oases, Farmland and Forestry",8100,Plantations,1
+8000,"Oases, Farmland and Forestry",8200,Farmland,1
+8000,"Oases, Farmland and Forestry",8300,Livestock areas,1
+8000,"Oases, Farmland and Forestry",8400,Forestry plantations,1
+9000,Urban habitat types,9110,High Density Urban,1
+9000,Urban habitat types,9120,Low Density Urban,1
+9000,Urban habitat types,9210,Oil Industry,1
+9000,Urban habitat types,9220,Airports and Aerodromes,1
+9000,Urban habitat types,9230,Port Areas,1
+9000,Urban habitat types,9240,Other industry,1
+9000,Urban habitat types,9300,Leisure areas,1
+9000,Urban habitat types,9400,Paved roads,1
+9000,Urban habitat types,9500,Pipelines infrastructure,1
+9000,Urban habitat types,9600,Disturbed ground,1
