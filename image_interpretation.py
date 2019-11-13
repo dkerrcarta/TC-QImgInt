@@ -198,19 +198,21 @@ class ImageInterpretation:
         for index, feature in enumerate(layer.getFeatures()):
             for y_feature in layer.getFeatures():
                 if not y_feature.id() == feature.id():
-                    #if y_feature.geometry().overlaps(feature.geometry()):
-                    #    print(f'Overlaps between id {feature[1]} and {y_feature[1]}')
-                    #    self.iface.messageBar().pushMessage("Error", f'Overlaps between rows {feature[1]} and {y_feature[1]}', level=Qgis.Critical)
-                    #    geom_okay = False
+                    if y_feature.geometry().overlaps(feature.geometry()):
+                        #print(f'Overlaps between id {feature[1]} ({feature.id()}) and {y_feature[1]} ({y_feature.id()})')
+                        #self.iface.messageBar().pushMessage("Error", f'Overlaps between rows {feature[1]} and {y_feature[1]}', level=Qgis.Critical)
+                        #geom_okay = False
                     #if y_feature.geometry().intersects(feature.geometry()):
-                    #    intersection = y_feature.geometry().intersection(feature.geometry())
-                    #    print(f'INTERSECTION AREA: {intersection.area()} between {y_feature[1]} and {feature[1]}')
+                        intersection = y_feature.geometry().intersection(feature.geometry())
+                        if intersection.area() > 0.05:
+                            print(f'INTERSECTION AREA: {intersection.area()} between {y_feature[1]} and {feature[1]}')
+                            geom_okay = False
                     if feature.geometry().contains(y_feature.geometry()):
-                        print(f'Row {feature[1]} contains {y_feature[1]}')
+                        print(f'Row {feature[1]} ({feature.id()}) contains {y_feature[1]} {feature.id()}')
                         self.iface.messageBar().pushMessage("Error", f'Row {feature[1]} contains {y_feature[1]}', level=Qgis.Critical)
                         geom_okay = False
             if not feature.geometry().isGeosValid():
-                self.iface.messageBar().pushMessage("Error", f"There seems to be an invalid geometry in row {feature[1]}. Please fix this geometry before continuing", level=Qgis.Critical)
+                self.iface.messageBar().pushMessage("Error", f"There seems to be an invalid geometry in row {feature.id()}; Id {feature[1]}. Please fix this geometry before continuing", level=Qgis.Critical)
                 geom_okay = False
         return geom_okay
 
@@ -317,6 +319,8 @@ class ImageInterpretation:
         threshold_area = df['Int_area'][df['index'] == orthoid].values[0] * 0.000000005# <----- 0.000005% total area
         if abs(df['Int_area'][df['index'] == orthoid].values[0] - sum(area_of_all_polygons)) > threshold_area:
             areas_match = False
+            print(f'SUM: {sum(area_of_all_polygons)}')
+            print(f'EXPECTED: {abs(df["Int_area"][df["index"] == orthoid].values[0])}')
         return areas_match
 
     def join_to_pt_and_extract(self, layer):
