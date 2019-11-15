@@ -21,6 +21,11 @@
  *                                                                         *
  ***************************************************************************/
 """
+from pathlib import Path
+import pandas as pd
+import sys
+import os.path
+
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
@@ -33,11 +38,6 @@ from PyQt5.QtCore import QVariant
 from .resources import *
 # Import the code for the dialog
 from .image_interpretation_dialog import ImageInterpretationDialog
-import os.path
-
-from pathlib import Path
-import pandas as pd
-import sys
 
 BASE_DIR = Path(__file__).resolve().parent
 CSV = BASE_DIR.joinpath('csv/classes.csv')
@@ -192,28 +192,61 @@ class ImageInterpretation:
                 action)
             self.iface.removeToolBarIcon(action)
 
-    def geometry_okay(self, layer):
+    def geometry_okay(self, layer, folder):
         """Returns true if geometry good; False if not"""
         geom_okay = True
+        overlaps_csv = folder.joinpath(f'overlapping_geometries_{layer.name()}.csv')
+        invalid_csv = folder.joinpath(f'invalid_geometries_{layer.name()}.csv')
+        df_dict = {'ORTHOID': [], 'ID': [], 'RELATED_ID': [], 'PROBLEM': [], 'CHECKED': [], 'AREA': [], 'CRITICAL': [], 'LOCATION': []}
+        invalid_dict = {'ORTHOID': [], 'ID': [], 'CHECKED': []}
         for index, feature in enumerate(layer.getFeatures()):
             for y_feature in layer.getFeatures():
                 if not y_feature.id() == feature.id():
                     if y_feature.geometry().overlaps(feature.geometry()):
-                        #print(f'Overlaps between id {feature[1]} ({feature.id()}) and {y_feature[1]} ({y_feature.id()})')
-                        #self.iface.messageBar().pushMessage("Error", f'Overlaps between rows {feature[1]} and {y_feature[1]}', level=Qgis.Critical)
-                        #geom_okay = False
-                    #if y_feature.geometry().intersects(feature.geometry()):
                         intersection = y_feature.geometry().intersection(feature.geometry())
+                        df_dict['ORTHOID'].append(feature[0])
+                        df_dict['ID'].append(feature.id())
+                        df_dict['RELATED_ID'].append(y_feature.id())
+                        df_dict['PROBLEM'].append('Overlapping Geometries')
+                        df_dict['AREA'].append(intersection.area())
+                        df_dict['LOCATION'].append(intersection.asWkt())
+                        df_dict['CHECKED'].append('False')
                         if intersection.area() > 0.05:
-                            print(f'INTERSECTION AREA: {intersection.area()} between {y_feature[1]} and {feature[1]}')
-                            geom_okay = False
+                            #print(feature[5], feature.id())
+                            #print(y_feature[5], feature.id())
+                            #print(f'There is an intersection between polygons. INTERSECTION AREA: {intersection.area()} between {y_feature[1]} and {feature[1]}')
+                            df_dict['CRITICAL'].append('True')
+                            geom_okay = True
+                        else:
+                            df_dict['CRITICAL'].append('False')
                     if feature.geometry().contains(y_feature.geometry()):
-                        print(f'Row {feature[1]} ({feature.id()}) contains {y_feature[1]} {feature.id()}')
+                        intersection = y_feature.geometry().intersection(feature.geometry())
+                        #print(f'Row {feature[1]} ({feature.id()}) contains {y_feature[1]} {feature.id()}')
                         self.iface.messageBar().pushMessage("Error", f'Row {feature[1]} contains {y_feature[1]}', level=Qgis.Critical)
+                        df_dict['ORTHOID'].append(feature[0])
+                        df_dict['ID'].append(feature.id())
+                        df_dict['RELATED_ID'].append(y_feature.id())
+                        df_dict['PROBLEM'].append('One geometry contains another')
+                        df_dict['AREA'].append(intersection.area())
+                        df_dict['LOCATION'].append(intersection.asWkt())
+                        df_dict['CHECKED'].append('False')
+                        df_dict['CRITICAL'].append('True')
                         geom_okay = False
             if not feature.geometry().isGeosValid():
-                self.iface.messageBar().pushMessage("Error", f"There seems to be an invalid geometry in row {feature.id()}; Id {feature[1]}. Please fix this geometry before continuing", level=Qgis.Critical)
-                geom_okay = False
+                feature.geometry().makeValid()
+                if not feature.geometry().isGeosValid():
+                    print('COULD NOT MAKE VALID')
+                    invalid_dict['ORTHOID'].append(feature[0])
+                    invalid_dict['ID'].append(feature.id())
+                    invalid_dict['CHECKED'].append('False')
+                    #self.iface.messageBar().pushMessage("Error", f"There seems to be an invalid geometry in row {feature.id()}; Id {feature[1]}. Please fix this geometry before continuing. Try Fix geometries or repair geometries in ArcPro.", level=Qgis.Critical)
+                    geom_okay = True
+        if df_dict['ID']:
+            df = pd.DataFrame(data=df_dict)
+            df.to_csv(overlaps_csv, index=False)
+        if invalid_dict['ID']:
+            df_invalid = pd.DataFrame(data=invalid_dict)
+            df_invalid.to_csv(invalid_csv, index=False)
         return geom_okay
 
     def complete_fields(self, layer):
@@ -245,7 +278,7 @@ class ImageInterpretation:
             layer.changeAttributeValue(feature.id(), area_km, feature.geometry().area() / 10**6)
             layer.changeAttributeValue(feature.id(), area_ha, feature.geometry().area() / 10**4)
             ha_areas.append(feature.geometry().area() / 10**4)
-            layer.changeAttributeValue(feature.id(), orthoid_field, layer.name())
+            layer.changeAttributeValue(feature.id(), orthoid_field, feature[0])
             layer.changeAttributeValue(feature.id(), id_field, feature.id())
             
         layer.removeJoin(infoLyr.id())
@@ -268,20 +301,28 @@ class ImageInterpretation:
 
         for i in layer.getFeatures():
             if not i[hab_type] or not i[hab_id] or not i[hab_sub] or not i[mmu]:
-                print('MISSING')
                 values_invalid = True
         return values_invalid
 
-    def area_larger_than_mmu(self, layer):
+    def area_larger_than_mmu(self, layer, folder):
         """Returns True if polygons smaller than MMU, along with list of ids which fall below threshold"""
         ids_where_mmu_smaller = []
         greater_than_mmu = True
         area_ha = layer.fields().indexFromName('Area_HA')
         mmu_ha = layer.fields().indexFromName('MMU_HA')
+        check_mmu_areas_csv = folder.joinpath(f'check_mmu_log_{layer.name()}.csv')
+        df_dict = {'ID': [], 'CHECKED': [], 'AREA': [], 'MMU': []}
         for feature in layer.getFeatures():
             if feature[area_ha] < feature[mmu_ha]:
                 greater_than_mmu = False
                 ids_where_mmu_smaller.append(feature.id())
+                df_dict['ID'].append(feature[1])
+                df_dict['CHECKED'].append('False')
+                df_dict['AREA'].append(feature[area_ha])
+                df_dict['MMU'].append(feature[mmu_ha])
+        if df_dict['ID']:
+            df = pd.DataFrame(data=df_dict)
+            df.to_csv(check_mmu_areas_csv, index=False)
         return greater_than_mmu, ids_where_mmu_smaller
 
     def update_mmu_valid_field(self, layer):
@@ -319,9 +360,11 @@ class ImageInterpretation:
         threshold_area = df['Int_area'][df['index'] == orthoid].values[0] * 0.000000005# <----- 0.000005% total area
         if abs(df['Int_area'][df['index'] == orthoid].values[0] - sum(area_of_all_polygons)) > threshold_area:
             areas_match = False
-            print(f'SUM: {sum(area_of_all_polygons)}')
-            print(f'EXPECTED: {abs(df["Int_area"][df["index"] == orthoid].values[0])}')
-        return areas_match
+            print(f'SUM: {sum(area_of_all_polygons):.2f}')
+            print(f'EXPECTED: {abs(df["Int_area"][df["index"] == orthoid].values[0]):.2f}')
+        sum_area = sum(area_of_all_polygons)
+        expected_area = abs(df["Int_area"][df["index"] == orthoid].values[0])
+        return areas_match, sum_area, expected_area
 
     def join_to_pt_and_extract(self, layer):
         """Extract interpretation values to points"""
@@ -344,31 +387,65 @@ class ImageInterpretation:
                         pt_lyr.changeAttributeValue(feature_x.id(), f, feature_y[f_])
         pt_lyr.commitChanges()
 
+    def update_mmu_valid_where_intersect_border(self, layer, folder):
+        border_shp = [x for x in folder.iterdir() if x.name.endswith('_border.shp')][0]
+        #mmu_csv = [x for x in folder.iterdir() if x.name.startswith(f'check_mmu_log')][0]
+        mmu_csv = folder.joinpath(f'check_mmu_log_{layer.name()}.csv')
+        border_lyr = QgsProject.instance().addMapLayer(QgsVectorLayer(str(border_shp)))
+        mmu_valid_field = 'mmu_valid'
+        f_ = layer.fields().indexFromName(mmu_valid_field)
+        layer.startEditing()
+        for feature_x in layer.getFeatures():
+            for feature_y in border_lyr.getFeatures():
+                if feature_x.geometry().intersects(feature_y.geometry()):
+                    layer.changeAttributeValue(feature_x.id(), f_, 'True')
+                    if mmu_csv.exists():
+                        df = pd.read_csv(mmu_csv).set_index('ID')
+                        if df.index.contains(feature_x.id()):
+                            df['CHECKED'].loc[feature_x.id()] = 'True'
+                            print(df['CHECKED'].loc[feature_x.id()])
+                        df.to_csv(mmu_csv)
+        layer.commitChanges()
+        
+        QgsProject.instance().removeMapLayer(border_lyr)
+
+
+
+
+
     def check_inputs_and_fill_fields(self, layer):
         """Main function to carry out logic and call helper functions"""
         #check if geometry in added layers is valid
-        if self.geometry_okay(layer):
+        filename = Path(layer.source().split('|')[0]).resolve()
+        if filename.exists():
+            folder = filename.parent
             self.complete_fields(layer)
-            if self.invalid_values_in_shape_attributes(layer):
-                QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'There are invalid Habitat codes in the table. Please check the numeric subclass code in rows that have empty values.')
-            mmu_area_okay, ids_where_mmu_smaller = self.area_larger_than_mmu(layer)
-            if not mmu_area_okay:
-                 QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'The following IDs have areas smaller that the MMU. The file will still be saved, but these areas should be checked in rows: {ids_where_mmu_smaller}')
-            self.update_mmu_valid_field(layer)
-            if self.total_area_matches_expected_area(layer):
+            if self.geometry_okay(layer, folder):
+                if self.invalid_values_in_shape_attributes(layer):
+                    QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'There are invalid Habitat codes in the table. Please check the numeric subclass code in rows that have empty values.')
+                mmu_area_okay, ids_where_mmu_smaller = self.area_larger_than_mmu(layer, folder)
+                if not mmu_area_okay:
+                    QMessageBox.critical(self.iface.mainWindow(), "WARNING!", f'The following IDs have areas smaller that the MMU. The file will still be saved, but these areas should be checked in IDs: {ids_where_mmu_smaller}. Please check check_mmu_log_{layer.name()}.csv for details.')
+                self.update_mmu_valid_field(layer)
+                self.update_mmu_valid_where_intersect_border(layer, folder)
+                areas_match, sum_area, expected_area = self.total_area_matches_expected_area(layer)
+                if not areas_match:
+                    QMessageBox.critical(self.iface.mainWindow(),
+                            'Error with Areas!',
+                            f"The sum of interpretted areas is different to the total area of this tile. There may by errors/gaps in the polygons if no changes have been made to the external border. Sum area={sum_area:.2f} :: Expected area={expected_area:.2f}. This file will still be saved but please check the reason for the difference in areas before continuing. There may be slivers or gaps between geometries")
                 self.join_to_pt_and_extract(layer)
                 self.iface.messageBar().pushMessage("Success", "Shapefile saved successfully.")
                 QMessageBox.information(self.iface.mainWindow(),
                             'Success',
-                            "Shapefile saved successfully.")
+                            "Shapefile saved successfully.")        
             else:
                 QMessageBox.critical(self.iface.mainWindow(),
-                         'Error with Areas!',
-                         f"The sum of interpretted areas is different to the total area of this tile. There may by errors/gaps in the polygons.")        
+                            'Error! Something went wrong',
+                            "Shapefile NOT saved. Please check Python terminal or Message Log for details. You may need to run the 'FIX GEOMETRIES TOOL' or remove some overlapped polygons.")
         else:
             QMessageBox.critical(self.iface.mainWindow(),
-                         'Error! Something went wrong',
-                         "Shapefile NOT saved. Please check Python terminal or Message Log for details. You may need to run the 'FIX GEOMETRIES TOOL'.")
+                            'Error! Layer not saved',
+                            "Please save the selected layer before continuing.")
 
 
     def run(self):
